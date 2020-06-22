@@ -1,4 +1,4 @@
-Toytree
+Hey ! Toytree
 ==========
 
 .. image:: https://badges.gitter.im/toytree-help/Lobby.svg
