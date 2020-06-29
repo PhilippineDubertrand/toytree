@@ -380,6 +380,226 @@ class RandomTree(object):
                 node.name = "r{}".format(nidx[idx])
         return tre
 
+def timedependantBDtree(ntips=10,
+                time=4,
+                b= lambda x: x-1,
+                d= lambda x: x+1,
+                sampling_frac=0.7,
+                stop="taxa",
+                seed=None,
+                retain_extinct=False,
+                random_names=False,
+                verbose=False):
+        """
+        Generate a classic birth/death tree.
+        Parameters
+        -----------
+        ntips (int):
+            Number of tips to generate for 'taxa' stopping criterion.
+        time (float):
+            Amount of time to simulate for 'time' stopping criterion.
+        b (float):
+            Birth rate per time unit
+        d (float):
+            Death rate per time unit (d=0 produces Yule trees)
+        stop (str):
+            Stopping critereon. Valid values are only 'taxa' or 'time'.
+        seed (int):
+            Random number generator seed.
+        retain_extinct (bool):
+            (Unimplemented) Whether to retain internal nodes leading to extinct tips.
+        random_names (bool):
+            Whether to randomize tip names or name them in order.
+        verbose (bool):
+            Print some useful information
+        """
+        if stop not in ["taxa", "time"]:
+            raise ToytreeError("stop must be either 'taxa' or 'time'")
+
+        taxa_stop = ntips
+        time_stop = time
+
+        # set random seed
+        if seed:
+            np.random.seed(seed)
+
+        # start from random tree (idxs will be re-assigned at end)
+        tre = toytree.tree()
+        tre.treenode.idx = 0
+        gidx = 1
+
+        # counters for extinctions, total events, and time
+        resets = 0
+        ext = 0
+        evnts = 0
+        t = 0
+        
+        #Crown phylogeny: first event is a speciation: 
+        sp= tre.treenode
+        
+        c1 = sp.add_child(name=str(t) + "-1", dist=0)
+        c1.add_feature("tdiv", t)
+        c1.idx = gidx
+        gidx += 1
+
+        c2 = sp.add_child(name=str(t) + "-2", dist=0)
+        c2.add_feature("tdiv", t)
+        c2.idx = gidx
+        gidx += 1
+
+        # continue until stop var
+        while 1:
+
+            # get current tips
+            tips = tre.treenode.get_leaves()
+
+            # sample time until next event, increment t and evnts
+            #import pdb; pdb.set_trace()
+            B=b(t)
+            D=d(t)
+            #print ("speciation rate at",t,"=",b(t))
+            #print ("exctinction rate at",t,"=",d(t))
+            
+            # Exceptions : b(t)<=0 and d(t)<0)
+            if(B<=0):
+                B=0
+                t+=1
+            
+            else:
+                if(D<0):
+                    D=0
+                dt = np.random.exponential(1 / (len(tips) * (B + D)))
+                t = t+ dt
+                evnts += 1
+
+                # sample a [0-1] to choose birth or death and sample a tip node
+                r = np.random.sample()
+                sp = np.random.choice(tips)
+
+                # event is a birth
+                if (r <= B / (B + D)):
+                    c1 = sp.add_child(name=str(t) + "-1", dist=0)
+                    c1.add_feature("tdiv", t)
+                    c1.idx = gidx
+                    gidx += 1
+
+                    c2 = sp.add_child(name=str(t) + "-2", dist=0)
+                    c2.add_feature("tdiv", t)
+                    c2.idx = gidx
+                    gidx += 1
+
+                # else event is extinction
+                else:
+                    # get parent node
+                    parent = sp.up
+
+                    # if no parent then reset to empty tree
+                    if parent is None:
+                        resets += 1
+                        tre = toytree.tree()
+                        tre.treenode.idx = 0
+                        gidx = 1
+                        ext = 0
+                        evnts = 0
+                        t = 0
+
+                    # connect parent to sp' children
+                    else:
+                        # if parent is None then reset isn'it exactly the same than above ? 
+                        if sp.up is None:
+                            tre = toytree.tree()
+                            tre.treenode.idx = 0
+                            gidx = 1
+                            ext = 0
+                            evnts = 0
+                            t = 0
+
+                        # if parent is root 
+         
+                        elif (sp.up is tre.treenode):
+                            # if sister exists then sister is new root
+                            if (sp.up.children != None) :
+                                tre = [i for i in sp.up.children if i != sp][0]
+                                tre = toytree.tree(tre)
+                                tre.up = None
+                            # if parent root and sister doesn't exist : reset tree
+                            else:
+                                tre = toytree.tree()
+                                tre.treenode.idx = 0
+                                gidx = 1
+                                ext = 0
+                                evnts = 0
+                                t = 0
+
+
+                        # if parent is a non-root node then connect sister to up.up
+                        else:
+                            # get sister
+                            sister = [i for i in sp.up.children if i != sp][0]
+
+                            # connect sister to grandparent
+                            sister.up = sp.up.up
+
+                            # drop parent from grandparent
+                            sp.up.up.children.remove(sp.up)
+
+                            # add sister to grandparent children
+                            sp.up.up.children.append(sister)
+
+                            # extend sisters dist to reach grandparent
+                            sister.dist += sp.up.dist
+
+                        ext += 1
+
+                # update branch lengths so all tips end at time=present 
+                tips = tre.treenode.get_leaves()
+                for x in tips:
+                    x.dist += dt
+
+                # check stopping criterion
+                if stop == "taxa":
+                    if len(tips) >= taxa_stop:
+                        break
+                else:
+                    if t >= time_stop:
+                        break
+                    
+        #Bernoulli sampling
+        not_sampled=0
+        for x in tips:
+            p = np.random.sample()
+            if(p>sampling_frac): 
+                x.up.remove_child(x)
+                not_sampled+=1
+                
+        if(verbose):
+            print (not_sampled,"tip(s) removed because not sampled")
+            print ("sampling_fraction",sampling_frac)
+            
+        # report status
+        if verbose:
+            if evnts != ext:
+                fill = (evnts - ext, ext, evnts / (evnts - ext), resets)
+                print("b:\t{}\nd:\t{}\nb/d:\t{:.2f}\nreset:\t{}".format(*fill))
+            elif evnts==0 and ext==0:
+                fill = (evnts - ext, ext, resets)
+                print("b:\t{}\nd:\t{}\nb/d:\t0\nreset:\t{}".format(*fill))
+            else:
+                fill = (evnts - ext, ext, resets)
+                print("b:\t{}\nd:\t{}\nb/d:\t1\nreset:\t{}".format(*fill))
+
+        # update coords and return
+        tre.treenode.ladderize()
+        tre._coords.update()
+
+        # rename tips so names are in order else random
+        nidx = list(range(tre.ntips))
+        if random_names:
+            random.shuffle(nidx)
+        for idx, node in tre.idx_dict.items():
+            if node.is_leaf():
+                node.name = "r{}".format(nidx[idx])
+        return tre
 
 def _prune(tre, verbose=False):
     """
